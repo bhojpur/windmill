@@ -1,0 +1,239 @@
+syntax = "proto3";
+
+package v1;
+option go_package = "github.com/bhojpur/windmill/pkg/api/v1";
+import "google/protobuf/timestamp.proto";
+
+service WindmillService {
+    // StartLocalWindmill starts a Windmill on the Bhojpur.NET Platform directly.
+    // The incoming requests are expected in the following order:
+    //   1. metadata
+    //   2. all bytes constituting the windmill/config.yaml
+    //   3. all bytes constituting the Windmill YAML that will be executed (that the config.yaml points to)
+    //   4. all bytes constituting the gzipped Bhojpur.NET Platform application tar stream
+    //   5. the Bhojpur.NET Platform application tar stream done marker
+    rpc StartLocalWindmill(stream StartLocalWindmillRequest) returns (StartWindmillResponse) {};
+
+    // StartFromPreviousWindmill starts a new Windmill based on a previous one.
+    // If the previous Windmill does not have the can-replay condition set this call will result in an error.
+    rpc StartFromPreviousWindmill(StartFromPreviousWindmillRequest) returns (StartWindmillResponse) {};
+
+    // StartWindmillRequest starts a new Windmill based on its specification.
+    rpc StartWindmill(StartWindmillRequest) returns (StartWindmillResponse) {};
+
+    // Searches for Windmill(s) known to this Windmill
+    rpc ListWindmills(ListWindmillsRequest) returns (ListWindmillsResponse) {};
+
+    // Subscribe listens to new Windmill(s) updates
+    rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse) {};
+
+    // GetWindmill retrieves details of a single Windmill
+    rpc GetWindmill(GetWindmillRequest) returns (GetWindmillResponse) {};
+
+    // Listen listens to Windmill updates and log output of a running Windmill
+    rpc Listen(ListenRequest) returns (stream ListenResponse) {};
+
+    // StopWindmill stops a currently running Windmill
+    rpc StopWindmill(StopWindmillRequest) returns (StopWindmillResponse) {};
+}
+
+message StartLocalWindmillRequest {
+    oneof content {
+        WindmillMetadata metadata = 1;
+        bytes config_yaml = 2;
+        bytes windmill_yaml = 3;
+        bytes application_tar = 4;
+        bool application_tar_done = 5;
+    };
+}
+
+message StartWindmillResponse {
+    WindmillStatus status = 1;
+}
+
+message StartWindmillRequest {
+    WindmillMetadata metadata = 1;
+    string windmill_path = 2;
+    bytes windmill_yaml = 3;
+    bytes sideload = 4; 
+    google.protobuf.Timestamp wait_until = 5;
+    string name_suffix = 6;
+}
+
+message StartFromPreviousWindmillRequest {
+    string previous_windmill = 1;
+    string gitops_token = 2;
+    google.protobuf.Timestamp wait_until = 3;
+}
+
+message ListWindmillsRequest {
+    repeated FilterExpression filter = 1;
+    repeated OrderExpression order = 2;
+    int32 start = 3;
+    int32 limit = 4;
+}
+
+message FilterExpression {
+    repeated FilterTerm terms = 1;
+}
+
+message FilterTerm {
+    string field = 1;
+    string value = 2;
+    FilterOp operation = 3;
+    bool negate = 4;
+}
+
+enum FilterOp {
+    OP_EQUALS = 0;
+    OP_STARTS_WITH = 1;
+    OP_ENDS_WITH = 2;
+    OP_CONTAINS = 3;
+    OP_EXISTS = 4;
+}
+
+message OrderExpression {
+    string field = 1;
+    bool ascending = 2;
+}
+
+message ListWindmillsResponse {
+    int32 total = 1;
+    repeated WindmillStatus result = 2;
+}
+
+message SubscribeRequest {
+    repeated FilterExpression filter = 1;
+}
+
+message SubscribeResponse {
+    WindmillStatus result = 1;
+}
+
+message GetWindmillRequest {
+    string name = 1;
+}
+
+message GetWindmillResponse {
+    WindmillStatus result = 1;
+}
+
+message ListenRequest {
+    string name = 1;
+    bool updates = 2;
+    ListenRequestLogs logs = 3;
+}
+
+enum ListenRequestLogs {
+    LOGS_DISABLED = 0;
+    LOGS_UNSLICED = 1;
+    LOGS_RAW = 2;
+    LOGS_HTML = 3;
+}
+
+message ListenResponse {
+    oneof content {
+        WindmillStatus update = 1;
+        LogSliceEvent slice = 2;
+    };
+}
+
+message WindmillStatus {
+    string name = 1;
+    WindmillMetadata metadata = 2;
+    WindmillPhase phase = 3;
+    WindmillConditions conditions = 4;
+    string details = 5;
+    repeated WindmillResult results = 6;
+}
+
+message WindmillMetadata {
+    string owner = 1;
+    Repository repository = 2;
+    WindmillTrigger trigger = 3;
+    google.protobuf.Timestamp created = 4;
+    google.protobuf.Timestamp finished = 5;
+    repeated Annotation annotations = 6;
+    string windmill_spec_name = 7;
+}
+
+message Repository {
+    string host = 1;
+    string owner = 2;
+    string repo = 3;
+    string ref = 4;
+    string revision = 5;
+}
+
+message Annotation {
+    string key = 1;
+    string value = 2;
+}
+
+enum WindmillTrigger {
+    TRIGGER_UNKNOWN = 0;
+    TRIGGER_MANUAL = 1;
+    TRIGGER_PUSH = 2;
+    TRIGGER_DELETED = 3;
+}
+
+enum WindmillPhase {
+    // Unknown means we don't know what state the Windmill is in
+    PHASE_UNKNOWN = 0;
+
+    // Preparing means the Windmill hasn't started yet and isn't consuming resources in the system
+    PHASE_PREPARING = 1;
+
+    // Starting means the Windmill has been scheduled and is waiting to run. Things that might prevent it
+	// from running already are pod scheduling, image pull or container startup.
+    PHASE_STARTING = 2;
+
+    // Running means the Windmill is actually running and doing work.
+    PHASE_RUNNING = 3;
+
+    // Done means the Windmill has run and is finished
+    PHASE_DONE = 4;
+
+    // Cleaning means the Windmill is in post-run cleanup
+    PHASE_CLEANUP = 5;
+
+    // Waiting means the Windmill is waiting for its start time or some other condition to be met
+    PHASE_WAITING = 6;
+}
+
+message WindmillConditions {
+    bool success = 1;
+    int32 failure_count = 2;
+    bool can_replay = 3;
+    google.protobuf.Timestamp wait_until = 4;
+    bool did_execute = 5;
+}
+
+message WindmillResult {
+    string type = 1;
+    string payload = 2;
+    string description = 3;
+    repeated string channels = 4;
+}
+
+message LogSliceEvent {
+    string name = 1;
+    LogSliceType type = 2;
+    string payload = 3;
+}
+
+enum LogSliceType {
+    SLICE_ABANDONED = 0;
+    SLICE_PHASE = 1;
+    SLICE_START = 2;
+    SLICE_CONTENT = 3;
+    SLICE_DONE = 4;
+    SLICE_FAIL = 5;
+    SLICE_RESULT = 6;
+}
+
+message StopWindmillRequest {
+    string name = 1;
+}
+
+message StopWindmillResponse { }
